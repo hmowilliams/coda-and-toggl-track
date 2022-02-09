@@ -1,0 +1,106 @@
+// From https://stargazerllc.medium.com/programatically-import-toggl-time-data-to-google-sheets-invoice-449530b5f2d5
+
+const API_KEY = "<<API_KEY>>";
+const BLOB_STRING = `${API_KEY}:api_token`;
+const ENCODED_HEADER = Utilities.base64Encode(BLOB_STRING);
+const IGNORE_FIELDS = ["description"]; // ["id",<OTHER FIELDS YOU WANT TO IGNORE IN PAYLOAD>];
+var pageNumber = new Date().getDate() * 6;
+
+
+function fetchFromTGGL() {
+var fullResponse = [];
+
+  for (var i = 1; i <= pageNumber; i++) {
+  // Fetch Data from toggl
+  let response = UrlFetchApp.fetch(getUrl(i), {
+    headers: { Authorization: ENCODED_HEADER },
+  });
+
+  fullResponse = fullResponse.concat(JSON.parse(response.getContentText()).data); 
+  
+  }
+
+
+  // transform api payload into the data we want to use
+  const parsedResponse = fullResponse.map(parseTogglDataRowForInvoice);
+  // const parsedResponse = dataArr.map(parseTogglDataRowForInvoice);
+  const sheet = SpreadsheetApp.getActiveSheet();
+
+  // If you run the script twice you will get 2x rows as they append. This clears the sheet to start fresh. 
+  sheet.clear();
+
+  // set column headers from object keys
+  const row = parsedResponse[0];
+  Object.keys(row).forEach((key, i) => {
+    const range = sheet.getRange(1, i + 1, 1, 1);
+    range.setValue(key);
+  });
+
+  // Write the data rows
+  writeRowArrToSheet(parsedResponse);
+}
+
+// Get URL to send our request to. 
+const getUrl = (i) => {
+  const DAYS_TO_LOOKUP = parseInt(new Date().getDate())-1; // Days in month
+  console.log("Pages: " + DAYS_TO_LOOKUP);
+  const USER = "<<EMAIL>>";
+  const WORKSPACE_ID = "<<WORKSPACE_ID>>";
+
+  // The URL needs a value for time lookup constraints
+  const date = new Date();
+  date.setDate(date.getDate() - DAYS_TO_LOOKUP);
+  const dateString = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+  console.log(`https://api.track.toggl.com/reports/api/v2/details?user_agent=${USER}&workspace_id=${WORKSPACE_ID}&display_hours=decimal&since=${dateString}&page=${i}`);
+  return `https://api.track.toggl.com/reports/api/v2/details?user_agent=${USER}&workspace_id=${WORKSPACE_ID}&display_hours=decimal&since=${dateString}&page=${i}`;
+};
+
+//converts millis to hours. I bill in fracton of hours. if you use :15, :30 you might need to adjust this to a %60 or something. 
+const convertDuration = (duration) => {
+  const HOUR = 3600000;
+  console.log(duration, duration / HOUR, (duration / HOUR).toFixed(1));
+  return (duration / HOUR).toFixed(1);
+};
+
+// Converts dateTime to 2020-05-05 modify this to get a different output
+const convertDate = (dateTime) => {
+  const date = new Date(dateTime);
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDay()}`;
+};
+
+// toggls payload is not what I want to include in my invoice. So we adjust the payload to only include the information we want
+const parseTogglDataRowForInvoice = (togglObj) => {
+  return Object.keys(togglObj).reduce((acc, key) => {
+
+    // some keys we want to exclude from our results.
+    if (IGNORE_FIELDS.includes(key)) return acc;
+
+    // I want to convert the duration from millis to hours and rename the key
+    if (key === "dur") {
+      return { ...acc, quantity: convertDuration(togglObj[key]) };
+    }
+
+    // Dates we want to look like 2020-12-07 instead of the full date time formula, rename the key
+    if (key === "start") {
+      return { ...acc, date: convertDate(togglObj[key]) };
+    }
+
+    return { ...acc, [key]: togglObj[key] };
+  }, {});
+};
+
+// https://mashe.hawksey.info/2020/04/google-apps-script-patterns-writing-rows-of-data-to-google-sheets-the-v8-way/#gref
+const writeRowArrToSheet = (arr) => {
+  const sheet = SpreadsheetApp.getActiveSheet();
+  
+  // getting our headers
+  const heads = sheet.getDataRange().offset(0, 0, 1).getValues()[0];
+  
+  // convert object data into a 2d array
+  const tr = arr.map((row) => heads.map((key) => row[String(key)] || ""));
+  
+  // write result
+  sheet
+  .getRange(sheet.getLastRow() + 1, 1, tr.length, tr[0].length)
+  .setValues(tr);
+};
